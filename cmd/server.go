@@ -1,8 +1,10 @@
 package main
 
-import "go_stream_events/internal"
+import (
+	"go_stream_events/internal"
+)
 
 func main() {
 	internal.Bootstrap()
-	internal.Boot()
+	internal.BootV2()
 }
