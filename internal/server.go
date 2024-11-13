@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"github.com/cockroachdb/pebble"
 	"net"
 	"os"
 	"sync"
@@ -9,11 +10,18 @@ import (
 )
 
 type Server struct {
-	wg         sync.WaitGroup
-	listener   net.Listener
-	shutdown   chan struct{}
-	connection chan net.Conn
-	logFile    *os.File
+	wg          sync.WaitGroup
+	listener    net.Listener
+	shutdown    chan struct{}
+	connection  chan net.Conn
+	logFile     *os.File
+	dbInstances DBInstances
+}
+
+type DBInstances struct {
+	wg      sync.WaitGroup
+	dbMutex sync.RWMutex
+	store   map[string]*pebble.DB
 }
 
 type tcpKeepAliveListener struct {

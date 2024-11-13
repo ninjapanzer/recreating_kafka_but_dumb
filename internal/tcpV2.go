@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/cockroachdb/pebble"
 	"io"
 	"log"
 	"net"
@@ -16,7 +17,7 @@ import (
 func (s Server) handleConnection2(conn net.Conn) {
 	log.Printf("New connection from %v", conn.RemoteAddr())
 	defer conn.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	serde := NewSerde()
 	for {
@@ -35,26 +36,74 @@ func (s Server) handleConnection2(conn net.Conn) {
 		data := make([]byte, msgLength)
 		_, _ = io.ReadFull(conn, data)
 		msgType := binary.BigEndian.Uint32(data[:4])
-		if msgType == 1 {
+		if ctx.Value("mode") != nil {
+			v = Message{}
+		} else if msgType == 1 {
 			v = ProducerRegistration{}
+			ctx = context.WithValue(ctx, "mode", "Producer")
 		} else if msgType == 2 {
 			v = ConsumerRegistration{}
+			ctx = context.WithValue(ctx, "mode", "Consumer")
 		}
 		err := serde.DecodeCbor(bytes.NewReader(data[4:]), &v)
+		switch m := v.(type) {
+		case ProducerRegistration:
+			ctx = context.WithValue(ctx, "topic", m.TopicName)
+		case ConsumerRegistration:
+			ctx = context.WithValue(ctx, "topic", m.TopicName)
+		case Message:
+			var topic string = ctx.Value("topic").(string)
+			var pdb = s.readDbInstances(topic)
+			if pdb == nil {
+				pdb, err = pebble.Open(topic, &pebble.Options{})
+				if err != nil {
+					log.Println("pebble", err)
+					continue
+				}
+				s.writeDbInstances(topic, pdb)
+			}
+			err := pdb.Set([]byte("key"), []byte(m.Payload), nil)
+			if err != nil {
+				log.Println("error writing", err)
+			}
+		}
 		if err != nil {
 			if err.Error() != "EOF" {
 				log.Println("Error decoding message:", err)
 			}
 			break
 		}
-		log.Println(v)
+		log.Println(v, ctx.Value("topic"))
 	}
 	ctx.Done()
+}
+
+func (s *Server) readDbInstances(topic string) *pebble.DB {
+	resultCh := make(chan *pebble.DB)
+	go func(topic string) {
+		s.dbInstances.dbMutex.RLock()
+		resultCh <- s.dbInstances.store[topic]
+		s.dbInstances.dbMutex.RUnlock()
+	}(topic)
+
+	return <-resultCh
+}
+
+func (s *Server) writeDbInstances(topic string, db *pebble.DB) {
+	s.dbInstances.wg.Add(1)
+	go func(topic string, db *pebble.DB) {
+		defer s.dbInstances.wg.Done()
+		s.dbInstances.dbMutex.Lock()
+		s.dbInstances.store[topic] = db
+		s.dbInstances.dbMutex.Unlock()
+		log.Println("Caching Connection for ", topic)
+	}(topic, db)
 }
 
 func (s *Server) Start2(logFile *os.File) {
 	s.wg.Add(2)
 	s.logFile = logFile
+	s.dbInstances.store = make(map[string]*pebble.DB)
 	go s.acceptConnections()
 	go s.handleConnections(s.handleConnection2)
 }
@@ -62,6 +111,12 @@ func (s *Server) Start2(logFile *os.File) {
 func (s *Server) Stop2() {
 	close(s.shutdown)
 	s.listener.Close()
+	log.Println("Closing DB Connections")
+	for topic, instance := range s.dbInstances.store {
+		instance.Flush()
+		instance.Close()
+		log.Println("Closing Connection for ", topic)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -99,6 +154,6 @@ func BootV2() {
 	<-sigChan
 
 	log.Println("Shutting down server...")
-	s.Stop()
+	s.Stop2()
 	log.Println("Server stopped.")
 }

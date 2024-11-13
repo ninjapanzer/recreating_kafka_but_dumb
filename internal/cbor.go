@@ -5,20 +5,6 @@ import (
 	"io"
 )
 
-type ConsumerRegistration struct {
-	TopicName string `codec:"topic,string"`
-	Offset    uint64 `codec:"offset,uint64"`
-}
-
-type ConsumerRequest struct {
-	Offset uint64 `codec:"offset,uint64"`
-}
-
-type ProducerRegistration struct {
-	TopicName string `codec:"topic,string"`
-	Id        string `codec:"id,string"`
-}
-
 type CborSerde struct {
 	ch codec.CborHandle
 }
