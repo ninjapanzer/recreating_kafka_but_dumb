@@ -32,7 +32,7 @@ func (ln tcpKeepAliveListener) Accept() (c net.Conn, err error) {
 	return tc, err
 }
 
-func newTCPServer(address string) (*Server, error) {
+func newPersistentServer(address string) (*Server, error) {
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on address %s: %w", address, err)

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func (s Server) handleConnection2(conn net.Conn) {
+func (s *Server) handleConnection2(conn net.Conn) {
 	log.Printf("New connection from %v", conn.RemoteAddr())
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -65,7 +65,7 @@ func (s Server) handleConnection2(conn net.Conn) {
 			err := pdb.Set([]byte("key"), []byte(m.Payload), nil)
 			var writer = s.eventStore.Get(topic)
 			if writer == nil {
-				h, err := os.OpenFile(topic+".log", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+				h, err := os.OpenFile(topic+".log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
 				if err != nil {
 					log.Println("open", err)
 				}
@@ -128,7 +128,7 @@ func (s *Server) Stop2() {
 }
 
 func BootV2() {
-	s, err := newServer(":8080")
+	s, err := newPersistentServer(":8080")
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
