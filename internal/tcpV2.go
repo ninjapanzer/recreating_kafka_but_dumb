@@ -63,6 +63,15 @@ func (s Server) handleConnection2(conn net.Conn) {
 				s.writeDbInstances(topic, pdb)
 			}
 			err := pdb.Set([]byte("key"), []byte(m.Payload), nil)
+			var writer = s.readEventStore(topic)
+			if writer == nil {
+				h, err := os.OpenFile(topic+".log", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+				if err != nil {
+					log.Println("open", err)
+				}
+				writer = s.writeEventStore(topic, h)
+			}
+			writer.Write([]byte(m.Payload))
 			if err != nil {
 				log.Println("error writing", err)
 			}
@@ -100,10 +109,38 @@ func (s *Server) writeDbInstances(topic string, db *pebble.DB) {
 	}(topic, db)
 }
 
+func (s *Server) readEventStore(topic string) *EventWriter {
+	resultCh := make(chan *EventWriter)
+	go func(topic string) {
+		s.eventStore.mu.RLock()
+		resultCh <- s.eventStore.writer[topic]
+		s.eventStore.mu.RUnlock()
+	}(topic)
+
+	return <-resultCh
+}
+
+func (s *Server) writeEventStore(topic string, h *os.File) *EventWriter {
+	s.eventStore.wg.Add(1)
+	resultCh := make(chan *EventWriter)
+	go func(topic string, h *os.File) {
+		defer s.eventStore.wg.Done()
+		s.eventStore.mu.Lock()
+		var writer = &EventWriter{handle: h}
+		resultCh <- writer
+		s.eventStore.writer[topic] = writer
+		s.eventStore.mu.Unlock()
+		log.Println("Caching Connection for ", topic)
+	}(topic, h)
+
+	return <-resultCh
+}
+
 func (s *Server) Start2(logFile *os.File) {
 	s.wg.Add(2)
 	s.logFile = logFile
 	s.dbInstances.store = make(map[string]*pebble.DB)
+	s.eventStore.writer = make(map[string]*EventWriter)
 	go s.acceptConnections()
 	go s.handleConnections(s.handleConnection2)
 }
@@ -116,6 +153,12 @@ func (s *Server) Stop2() {
 		instance.Flush()
 		instance.Close()
 		log.Println("Closing Connection for ", topic)
+	}
+
+	for topic, writer := range s.eventStore.writer {
+		writer.handle.Sync()
+		writer.handle.Close()
+		log.Println("Closing handle for ", topic)
 	}
 
 	done := make(chan struct{})

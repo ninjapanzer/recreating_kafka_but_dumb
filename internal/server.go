@@ -3,6 +3,7 @@ package internal
 import (
 	"fmt"
 	"github.com/cockroachdb/pebble"
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -16,12 +17,38 @@ type Server struct {
 	connection  chan net.Conn
 	logFile     *os.File
 	dbInstances DBInstances
+	eventStore  EventStore
 }
 
 type DBInstances struct {
 	wg      sync.WaitGroup
 	dbMutex sync.RWMutex
 	store   map[string]*pebble.DB
+}
+
+type EventWriter struct {
+	wg     sync.WaitGroup
+	mu     sync.RWMutex
+	handle *os.File
+}
+
+func (ew *EventWriter) Write(b []byte) {
+	ew.wg.Add(1)
+	go func([]byte) {
+		defer ew.wg.Done()
+		ew.mu.Lock()
+		ew.handle.Write(b)
+		ew.handle.Write([]byte("\n"))
+		ew.handle.Sync()
+		log.Println("writing ", b)
+		ew.mu.Unlock()
+	}(b)
+}
+
+type EventStore struct {
+	wg     sync.WaitGroup
+	mu     sync.RWMutex
+	writer map[string]*EventWriter
 }
 
 type tcpKeepAliveListener struct {
