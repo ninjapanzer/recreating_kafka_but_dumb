@@ -1,8 +1,11 @@
 package internal
 
 import (
+	"bufio"
 	"github.com/cockroachdb/pebble"
+	"io"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -29,9 +32,10 @@ func (db *DBCache) Set(key string, value *pebble.DB) *pebble.DB {
 }
 
 type EventWriter struct {
-	wg     sync.WaitGroup
-	mu     sync.Mutex
-	handle *os.File
+	wg            sync.WaitGroup
+	mu            sync.Mutex
+	handle        *os.File
+	currentOffset uint64
 }
 
 func (ew *EventWriter) Write(b []byte) {
@@ -46,14 +50,32 @@ func (ew *EventWriter) Write(b []byte) {
 	}(b)
 }
 
+func (ew *EventWriter) Read(l uint64) ([]string, error) {
+	reader := bufio.NewReader(ew.handle)
+	ew.handle.Seek(int64(ew.currentOffset), io.SeekStart)
+	var lines []string
+	var offset uint64 = 0
+	for i := uint64(0); i < l; i++ {
+		line, err := reader.ReadString('\n')
+		offset += uint64(len([]byte(line)))
+		if err != nil {
+			ew.currentOffset += offset
+			return lines, err
+		}
+		lines = append(lines, strings.TrimSpace(line))
+	}
+	ew.currentOffset += offset
+	return lines, nil
+}
+
 type EventStore struct {
 	rc    ResourceCache
 	store map[string]*EventWriter
 }
 
 func (es *EventStore) Get(key string) *EventWriter {
-	es.rc.dbMutex.RLock()
-	defer es.rc.dbMutex.RUnlock()
+	es.rc.dbMutex.Lock()
+	defer es.rc.dbMutex.Unlock()
 	return es.store[key]
 }
 

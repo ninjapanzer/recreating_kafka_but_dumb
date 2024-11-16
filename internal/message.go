@@ -9,9 +9,15 @@ type Message struct {
 	Payload   string    `codec:"payload"`
 }
 
+type Poll struct {
+	Offset uint64 `codec:"offset"`
+	Limit  uint64 `codec:"limit"`
+}
+
 type ConsumerRegistration struct {
-	TopicName string `codec:"topic,string"`
-	Offset    uint64 `codec:"offset,uint64"`
+	TopicName    string `codec:"topic,string"`
+	ConsumerName string `codec:"consumer,string"`
+	Offset       uint64 `codec:"offset,uint64"`
 }
 
 type ConsumerRequest struct {
@@ -52,11 +58,21 @@ func NewConsumerRegistrationMessage(msg ConsumerRegistration) *CborMessage {
 	return m
 }
 
-func NewProducerMessage(msg Message) *CborMessage {
+func NewMessage(msg Message) *CborMessage {
 	m := &CborMessage{
 		protocolMessage: &TCPMessage{},
 	}
 	m.protocolMessage.SetMessageType(3)
+	NewSerde().EncodeCbor(m.protocolMessage, msg)
+	m.bufferWithLengthPrefix.Write(m.protocolMessage.Bytes())
+	return m
+}
+
+func NewPoll(msg Poll) *CborMessage {
+	m := &CborMessage{
+		protocolMessage: &TCPMessage{},
+	}
+	m.protocolMessage.SetMessageType(4)
 	NewSerde().EncodeCbor(m.protocolMessage, msg)
 	m.bufferWithLengthPrefix.Write(m.protocolMessage.Bytes())
 	return m

@@ -6,5 +6,5 @@ import (
 
 func main() {
 	internal.Bootstrap()
-	internal.BootV2()
+	internal.Boot()
 }
