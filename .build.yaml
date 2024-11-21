@@ -1,0 +1,12 @@
+image: nixos/unstable
+packages:
+  - nixos.go
+  - nixos.gnumake
+sources:
+  - https://git.sr.ht/~ninjapanzer/krappy_kafka
+environment:
+  build: nothing
+tasks:
+  - test: |
+      cd krappy_kafka
+      make build
