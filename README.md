@@ -1,4 +1,5 @@
 ## Stuff thats Dumb
+[![builds.sr.ht status](https://builds.sr.ht/~ninjapanzer.svg?search=krappy_kafka)](https://builds.sr.ht/~ninjapanzer?search=krappy_kafka)
 
 ### Links
 - https://github.com/jmhodges/levigo
