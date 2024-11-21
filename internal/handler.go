@@ -45,26 +45,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 				break
 			}
 		}
-		var v interface{}
 		data := make([]byte, msgLength)
 		_, _ = io.ReadFull(conn, data)
 		if msgLength == 0 {
 			break
 		}
 		msgType := binary.BigEndian.Uint32(data[:4])
-		if msgType == 1 {
-			v = ProducerRegistration{}
-			ctx = context.WithValue(ctx, "mode", "Producer")
-		} else if msgType == 2 {
-			v = ConsumerRegistration{}
-			ctx = context.WithValue(ctx, "mode", "Consumer")
-		} else if msgType == 3 {
-			v = Message{}
-		} else if msgType == 4 {
-			v = Poll{}
-		}
-		err := serde.DecodeCbor(bytes.NewReader(data[4:]), &v)
-		switch m := v.(type) {
+		message, ctx, err := parseMessage(msgType, data[4:], ctx, serde)
+		switch m := message.(type) {
 		case ProducerRegistration:
 			ctx = context.WithValue(ctx, "topic", m.TopicName)
 		case ConsumerRegistration:
@@ -98,7 +86,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 				log.Println("reader error:", err)
 				conn.Write(NewMessage(Message{
 					Timestamp: time.Now(),
-					Payload:   "EOF",
+					Payload:   strconv.FormatUint(r.currentOffset, 10),
 				}).Bytes())
 			}
 
@@ -139,7 +127,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			}
 			break
 		}
-		log.Println(v, ctx.Value("topic"))
+		log.Println(message, ctx.Value("topic"))
 	}
 	ctx.Done()
 }
@@ -222,4 +210,34 @@ func Boot() {
 	log.Println("Shutting down server...")
 	s.Stop()
 	log.Println("Server stopped.")
+}
+
+func producerRegistration(ctx context.Context) {}
+func consumerRegistration(ctx context.Context) {}
+
+const (
+	ProducerRegistrationHandler = "ProducerRegistration"
+	ConsumerRegistrationHandler = "ConsumerRegistration"
+)
+
+func parseMessage(msgType uint32, message []byte, ctx context.Context, serde CborSerde) (interface{}, context.Context, error) {
+	var v interface{}
+	if msgType == 1 {
+		v = ProducerRegistration{}
+		ctx = context.WithValue(ctx, "mode", "Producer")
+	} else if msgType == 2 {
+		v = ConsumerRegistration{}
+		ctx = context.WithValue(ctx, "mode", "Consumer")
+	} else if msgType == 3 {
+		v = Message{}
+	} else if msgType == 4 {
+		v = Poll{}
+	}
+	err := serde.DecodeCbor(bytes.NewReader(message), &v)
+	return v, ctx, err
+}
+
+func registerHandlers(s *Server) {
+	s.messageHandlers[ProducerRegistrationHandler] = producerRegistration
+	s.messageHandlers[ConsumerRegistrationHandler] = consumerRegistration
 }

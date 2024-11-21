@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -9,13 +10,14 @@ import (
 )
 
 type Server struct {
-	wg          sync.WaitGroup
-	listener    net.Listener
-	shutdown    chan struct{}
-	connection  chan net.Conn
-	logFile     *os.File
-	dbInstances DBCache
-	eventStore  EventStore
+	wg              sync.WaitGroup
+	listener        net.Listener
+	shutdown        chan struct{}
+	connection      chan net.Conn
+	logFile         *os.File
+	dbInstances     DBCache
+	eventStore      EventStore
+	messageHandlers map[string]func(ctx context.Context)
 }
 
 type tcpKeepAliveListener struct {

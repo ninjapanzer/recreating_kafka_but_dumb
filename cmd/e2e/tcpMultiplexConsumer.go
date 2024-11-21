@@ -12,7 +12,7 @@ import (
 
 func StartMultiplexConsumer() {
 	msg := internal.NewConsumerRegistrationMessage(
-		internal.ConsumerRegistration{TopicName: "topic1", ConsumerName: "conn1", Offset: 0})
+		internal.ConsumerRegistration{TopicName: "topic1", ConsumerName: "conn1", Offset: 22777})
 	msg2 := internal.NewConsumerRegistrationMessage(
 		internal.ConsumerRegistration{TopicName: "topic2", ConsumerName: "conn2", Offset: 0})
 	var consumerConn, consumerConn2 net.Conn
@@ -33,16 +33,16 @@ func StartMultiplexConsumer() {
 	}
 	for {
 		pollReq := internal.NewPoll(
-			internal.Poll{Offset: 0, Limit: 10})
+			internal.Poll{Offset: 22777, Limit: 100})
 
 		write, err := consumerConn.Write(pollReq.Bytes())
 		if err != nil {
 			return
 		}
-		log.Println(write)
+		log.Println("write len", write)
 
 		consumerConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 100; i++ {
 			var msgLength uint32
 			err = binary.Read(consumerConn, binary.BigEndian, &msgLength)
 			if err == io.EOF {
@@ -65,7 +65,7 @@ func StartMultiplexConsumer() {
 			log.Println(v)
 		}
 
-		//time.Sleep(1 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 	err := consumerConn.Close()
 	err = consumerConn2.Close()

@@ -1,9 +1,8 @@
-package main
+package e2e
 
 import (
 	"flag"
 	"fmt"
-	"go_stream_events/cmd/e2e"
 )
 
 func main() {
@@ -14,9 +13,9 @@ func main() {
 	flag.Parse()
 
 	if true == *multiplexProducer {
-		e2e.StartMultiplexProducer()
+		StartMultiplexProducer()
 	} else if true == *multiplexConsumer {
-		e2e.StartMultiplexConsumer()
+		StartMultiplexConsumer()
 	} else {
 		fmt.Print(flag.ErrHelp)
 	}
