@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
@@ -10,14 +9,13 @@ import (
 )
 
 type Server struct {
-	wg              sync.WaitGroup
-	listener        net.Listener
-	shutdown        chan struct{}
-	connection      chan net.Conn
-	logFile         *os.File
-	dbInstances     DBCache
-	eventStore      EventStore
-	messageHandlers map[string]func(ctx context.Context)
+	wg          sync.WaitGroup
+	listener    net.Listener
+	shutdown    chan struct{}
+	connection  chan net.Conn
+	logFile     *os.File
+	dbInstances DBCache
+	eventStore  EventStore
 }
 
 type tcpKeepAliveListener struct {
@@ -88,4 +86,8 @@ func (s *Server) handleConnections(handler func(conn net.Conn)) {
 			go handler(conn)
 		}
 	}
+}
+
+func (s *Server) Write(conn net.Conn, data []byte) (int, error) {
+	return conn.Write(data)
 }

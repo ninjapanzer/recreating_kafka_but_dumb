@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"github.com/cockroachdb/pebble"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -19,14 +20,16 @@ type DBCache struct {
 }
 
 func (db *DBCache) Get(key string) *pebble.DB {
-	db.rc.dbMutex.RLock()
-	defer db.rc.dbMutex.RUnlock()
+	db.rc.dbMutex.Lock()
+	log.Println("GET", key)
+	defer db.rc.dbMutex.Unlock()
 	return db.store[key]
 }
 
 func (db *DBCache) Set(key string, value *pebble.DB) *pebble.DB {
 	db.rc.dbMutex.Lock()
 	defer db.rc.dbMutex.Unlock()
+	log.Println("SET", key)
 	db.store[key] = value
 	return value
 }

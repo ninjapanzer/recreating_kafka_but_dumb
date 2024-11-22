@@ -16,7 +16,148 @@ import (
 	"time"
 )
 
-func (s *Server) handleConnection(conn net.Conn) {
+const (
+	ProducerRegistrationHandler = "ProducerRegistration"
+	ConsumerRegistrationHandler = "ConsumerRegistration"
+	PollHandler                 = "Poll"
+	MessageHandler              = "Message"
+)
+
+func parseMessage(msgType uint32, message []byte, ctx context.Context, serde CborSerde) (interface{}, context.Context, error) {
+	var v interface{}
+	if msgType == 1 {
+		v = ProducerRegistration{}
+		ctx = context.WithValue(ctx, "mode", "Producer")
+	} else if msgType == 2 {
+		v = ConsumerRegistration{}
+		ctx = context.WithValue(ctx, "mode", "Consumer")
+	} else if msgType == 3 {
+		v = Message{}
+	} else if msgType == 4 {
+		v = Poll{}
+	}
+	err := serde.DecodeCbor(bytes.NewReader(message), &v)
+	return v, ctx, err
+}
+
+type Handler interface {
+	RegisterHandler(string, func(s *Server, ctx context.Context, contract interface{}) context.Context)
+	ExecuteHandler(string, context.Context, interface{}) context.Context
+	ExecuteWithWriteHandler(string, context.Context, interface{}, *io.Writer) context.Context
+}
+
+type Handlers struct {
+	s               *Server
+	messageHandlers map[string]func(ctx context.Context, contract interface{}, writer io.Writer) context.Context
+}
+
+func NewHandlers(s *Server) *Handlers {
+	return &Handlers{
+		s:               s,
+		messageHandlers: make(map[string]func(ctx context.Context, contract interface{}, writer io.Writer) context.Context),
+	}
+}
+
+func (h *Handlers) RegisterHandler(name string, handler func(s *Server, ctx context.Context, contract interface{}, w io.Writer) context.Context) {
+	h.messageHandlers[name] = func(ctx context.Context, contract interface{}, writer io.Writer) context.Context {
+		return handler(h.s, ctx, contract, writer)
+	}
+}
+
+func (h *Handlers) ExecuteHandler(name string, ctx context.Context, contract interface{}) context.Context {
+	return h.messageHandlers[name](ctx, contract, nil)
+}
+
+func (h *Handlers) ExecuteWithWriteHandler(name string, ctx context.Context, contract interface{}, w io.Writer) context.Context {
+	return h.messageHandlers[name](ctx, contract, w)
+}
+
+func producerRegistration(s *Server, ctx context.Context, contract interface{}, w io.Writer) context.Context {
+	producer := contract.(ProducerRegistration)
+	return context.WithValue(ctx, "topic", producer.TopicName)
+}
+
+func consumerRegistration(s *Server, ctx context.Context, contract interface{}, w io.Writer) context.Context {
+	consumer := contract.(ConsumerRegistration)
+	ctx = context.WithValue(ctx, "topic", consumer.TopicName)
+	ctx = context.WithValue(ctx, "registration", consumer)
+	readerReg := consumer.TopicName + "_" + consumer.ConsumerName
+	c, err := declareConsumer(readerReg, s.eventStore)
+	s.eventStore.Set(c, nil)
+	if err != nil {
+		log.Println("Failed to declare", readerReg)
+	}
+	ctx = context.WithValue(ctx, "consumerReader", c)
+	return ctx
+}
+
+func pollHandler(s *Server, ctx context.Context, contract interface{}, w io.Writer) context.Context {
+	poll := contract.(Poll)
+	conn := w.(net.Conn)
+	var topic = ctx.Value("topic").(string)
+	var reader = ctx.Value("consumerReader").(string)
+	var r = s.eventStore.Get(reader)
+	if r == nil || r.handle == nil {
+		h, err := os.OpenFile(topic+".log", os.O_RDONLY, 0666)
+		if err != nil {
+			log.Println("open", err)
+		}
+		r = s.eventStore.Set(reader, h)
+		log.Println("collected reader", reader)
+	}
+	read, err := r.Read(poll.Limit)
+	if err != nil {
+		log.Println("reader error:", err)
+		conn.Write(NewMessage(Message{
+			Timestamp: time.Now(),
+			Payload:   strconv.FormatUint(r.currentOffset, 10),
+		}).Bytes())
+	}
+
+	for _, line := range read {
+		conn.Write(NewMessage(Message{
+			Timestamp: time.Now(),
+			Payload:   line,
+		}).Bytes())
+	}
+
+	return ctx
+}
+
+func messageHandler(s *Server, ctx context.Context, contract interface{}, w io.Writer) context.Context {
+	message := contract.(Message)
+	topic, ok := ctx.Value("topic").(string)
+	if !ok {
+		log.Println("topic not found")
+	}
+	var pdb = s.dbInstances.Get(topic)
+	if pdb == nil {
+		var err error
+		pdb, err = pebble.Open(topic, &pebble.Options{})
+		if err != nil {
+			log.Println("pebble", err)
+			return ctx
+		}
+		s.dbInstances.Set(topic, pdb)
+	}
+	err := pdb.Set([]byte("key"), []byte(message.Payload), nil)
+	var writer = s.eventStore.Get(topic)
+	if writer == nil {
+		h, err := os.OpenFile(topic+".log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Println("open", err)
+		}
+		writer = s.eventStore.Set(topic, h)
+	}
+	writer.Write([]byte(message.Payload))
+	if err != nil {
+		log.Println("error writing", err)
+	}
+
+	return ctx
+}
+
+func (h *Handlers) handleConnection(conn net.Conn) {
 	log.Printf("New connection from %v", conn.RemoteAddr())
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
@@ -29,7 +170,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			if err == io.EOF {
 				log.Printf("Connection Closed from %v", conn.RemoteAddr())
 				if reader := ctx.Value("consumerReader"); reader != nil {
-					r := s.eventStore.Get(reader.(string))
+					r := h.s.eventStore.Get(reader.(string))
 					if r != nil {
 						err := r.handle.Close()
 						if err != nil {
@@ -51,75 +192,22 @@ func (s *Server) handleConnection(conn net.Conn) {
 			break
 		}
 		msgType := binary.BigEndian.Uint32(data[:4])
-		message, ctx, err := parseMessage(msgType, data[4:], ctx, serde)
+		message, ctx2, err := parseMessage(msgType, data[4:], ctx, serde)
+		ctx = ctx2
+
 		switch m := message.(type) {
 		case ProducerRegistration:
-			ctx = context.WithValue(ctx, "topic", m.TopicName)
+			ctx = h.ExecuteHandler(ProducerRegistrationHandler, ctx, m)
 		case ConsumerRegistration:
-			ctx = context.WithValue(ctx, "topic", m.TopicName)
-			ctx = context.WithValue(ctx, "registration", m)
-			readerReg := m.TopicName + "_" + m.ConsumerName
-			c, err := declareConsumer(readerReg, s.eventStore)
-			s.eventStore.Set(c, nil)
-			if err != nil {
-				log.Println("Failed to declare", readerReg)
-			}
-			ctx = context.WithValue(ctx, "consumerReader", c)
+			ctx = h.ExecuteHandler(ConsumerRegistrationHandler, ctx, m)
 		case Poll:
 			if ctx.Value("mode").(string) != "Consumer" {
 				log.Println("Producers Cannot Poll")
 				continue
 			}
-			var topic = ctx.Value("topic").(string)
-			var reader = ctx.Value("consumerReader").(string)
-			var r = s.eventStore.Get(reader)
-			if r == nil || r.handle == nil {
-				h, err := os.OpenFile(topic+".log", os.O_RDONLY, 0666)
-				if err != nil {
-					log.Println("open", err)
-				}
-				r = s.eventStore.Set(reader, h)
-				log.Println("collected reader", reader)
-			}
-			read, err := r.Read(m.Limit)
-			if err != nil {
-				log.Println("reader error:", err)
-				conn.Write(NewMessage(Message{
-					Timestamp: time.Now(),
-					Payload:   strconv.FormatUint(r.currentOffset, 10),
-				}).Bytes())
-			}
-
-			for _, line := range read {
-				conn.Write(NewMessage(Message{
-					Timestamp: time.Now(),
-					Payload:   line,
-				}).Bytes())
-			}
+			ctx = h.ExecuteWithWriteHandler(PollHandler, ctx, m, conn)
 		case Message:
-			var topic = ctx.Value("topic").(string)
-			var pdb = s.dbInstances.Get(topic)
-			if pdb == nil {
-				pdb, err = pebble.Open(topic, &pebble.Options{})
-				if err != nil {
-					log.Println("pebble", err)
-					continue
-				}
-				s.dbInstances.Set(topic, pdb)
-			}
-			err := pdb.Set([]byte("key"), []byte(m.Payload), nil)
-			var writer = s.eventStore.Get(topic)
-			if writer == nil {
-				h, err := os.OpenFile(topic+".log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
-				if err != nil {
-					log.Println("open", err)
-				}
-				writer = s.eventStore.Set(topic, h)
-			}
-			writer.Write([]byte(m.Payload))
-			if err != nil {
-				log.Println("error writing", err)
-			}
+			ctx = h.ExecuteWithWriteHandler(MessageHandler, ctx, m, conn)
 		}
 		if err != nil {
 			if err.Error() != "EOF" {
@@ -152,8 +240,13 @@ func (s *Server) Start(logFile *os.File) {
 	s.logFile = logFile
 	s.dbInstances.store = make(map[string]*pebble.DB)
 	s.eventStore.store = make(map[string]*EventWriter)
+	handlers := NewHandlers(s)
+	handlers.RegisterHandler(ConsumerRegistrationHandler, consumerRegistration)
+	handlers.RegisterHandler(ProducerRegistrationHandler, producerRegistration)
+	handlers.RegisterHandler(PollHandler, pollHandler)
+	handlers.RegisterHandler(MessageHandler, messageHandler)
 	go s.acceptConnections()
-	go s.handleConnections(s.handleConnection)
+	go s.handleConnections(handlers.handleConnection)
 }
 
 func (s *Server) Stop() {
@@ -210,34 +303,4 @@ func Boot() {
 	log.Println("Shutting down server...")
 	s.Stop()
 	log.Println("Server stopped.")
-}
-
-func producerRegistration(ctx context.Context) {}
-func consumerRegistration(ctx context.Context) {}
-
-const (
-	ProducerRegistrationHandler = "ProducerRegistration"
-	ConsumerRegistrationHandler = "ConsumerRegistration"
-)
-
-func parseMessage(msgType uint32, message []byte, ctx context.Context, serde CborSerde) (interface{}, context.Context, error) {
-	var v interface{}
-	if msgType == 1 {
-		v = ProducerRegistration{}
-		ctx = context.WithValue(ctx, "mode", "Producer")
-	} else if msgType == 2 {
-		v = ConsumerRegistration{}
-		ctx = context.WithValue(ctx, "mode", "Consumer")
-	} else if msgType == 3 {
-		v = Message{}
-	} else if msgType == 4 {
-		v = Poll{}
-	}
-	err := serde.DecodeCbor(bytes.NewReader(message), &v)
-	return v, ctx, err
-}
-
-func registerHandlers(s *Server) {
-	s.messageHandlers[ProducerRegistrationHandler] = producerRegistration
-	s.messageHandlers[ConsumerRegistrationHandler] = consumerRegistration
 }
