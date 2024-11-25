@@ -6,7 +6,10 @@ sources:
   - https://git.sr.ht/~ninjapanzer/krappy_kafka
 environment:
   build: nothing
+  NIX_CONFIG: "experimental-features = nix-command flakes"
 tasks:
   - test: |
       cd krappy_kafka
+      nix develop
+      source <(nix print-dev-env sourcehut:~eliasnaur/gio)
       make build
