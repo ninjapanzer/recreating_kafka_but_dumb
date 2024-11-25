@@ -2,11 +2,22 @@ image: nixos/unstable
 packages:
   - nixos.go
   - nixos.gnumake
+#  - nixos.vulkan-headers
+#  - nixos.libxkbcommon
+#  - nixos.wayland
+#  - nixos.xorg.libX11
+#  - nixos.xorg.libXcursor
+#  - nixos.xorg.libXfixes
+#  - nixos.libGL
+#  - nixos.pkg-config
 sources:
   - https://git.sr.ht/~ninjapanzer/krappy_kafka
 environment:
   build: nothing
+  NIX_CONFIG: "experimental-features = nix-command flakes"
 tasks:
   - test: |
       cd krappy_kafka
+      source <(nix print-dev-env .)
+      source <(nix print-dev-env sourcehut:~eliasnaur/gio)
       make build
